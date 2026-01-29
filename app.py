@@ -1,9 +1,9 @@
 """
-Plot Annotation Tool - v5.0 (Direct Scoring + Export + Random Pair + Calib)
+Plot Annotation Tool - v5.2 (Single Plot + VAD + Export + Random + Calib)
 Features:
-1) Absolute scoring for A and B on each dimension (1-10), + overall + notes
+1) Absolute scoring for ONE plot on each dimension (1-10), + overall + notes
 2) Export CSV + clear annotations
-3) Add annotator_id, timestamp, seed_id, method_name + Random Pair button
+3) Add annotator_id, timestamp, seed_id, method_name + Random Plot button
 4) Calibration items (gold plots) + per-annotator z-score normalization helper preview
 """
 
@@ -24,7 +24,7 @@ except ImportError:
 
 # ============== Page Config ==============
 st.set_page_config(
-    page_title="📖 Plot Annotation Tool",
+    page_title="📖 Plot Annotation Tool (Single • VAD)",
     page_icon="📖",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -59,8 +59,12 @@ st.markdown("""
         color: #333 !important;
         white-space: pre-wrap;
     }
-    .card-header-a { background: #2D3436; color: white; padding: 12px; border-radius: 6px 6px 0 0; }
-    .card-header-b { background: #00695C; color: white; padding: 12px; border-radius: 6px 6px 0 0; }
+    .card-header {
+        background: #2D3436;
+        color: white;
+        padding: 12px;
+        border-radius: 6px 6px 0 0;
+    }
     [data-testid="stGraphVizChart"] {
         background-color: white;
         padding: 10px;
@@ -173,8 +177,8 @@ def init_state():
         st.session_state.annotations = []
     if 'gold_ids' not in st.session_state:
         st.session_state.gold_ids = set()
-    if 'pair' not in st.session_state:
-        st.session_state.pair = {"a": 0, "b": 1}
+    if 'sel_idx' not in st.session_state:
+        st.session_state.sel_idx = 0
 
 def load_json(files):
     """Load JSON plots, simple de-dup by plot_id."""
@@ -193,15 +197,12 @@ def load_json(files):
 
 # ============== Rendering ==============
 
-def render_card(plot, label):
-    is_a = label == "A"
-    header_class = "card-header-a" if is_a else "card-header-b"
-
+def render_card(plot):
     with st.container():
         st.markdown(f"""
         <div style="border:1px solid #ddd; border-radius:6px; background:white; margin-bottom:20px;">
-            <div class="{header_class}">
-                <h4 style="margin:0; color:white;">{label}: {safe_get(plot,'title','Untitled')}</h4>
+            <div class="card-header">
+                <h4 style="margin:0; color:white;">{safe_get(plot,'title','Untitled')}</h4>
                 <div style="font-size:0.8em; opacity:0.9;">
                     {safe_get(plot,'genre','')} | {safe_get(plot,'status','')} |
                     seed={safe_get(plot,'seed_id', safe_get(plot,'seed',''))} |
@@ -259,20 +260,17 @@ def make_df():
         return pd.DataFrame()
     return pd.DataFrame(st.session_state.annotations)
 
-def per_annotator_zscore_preview(df: pd.DataFrame, dims):
+def per_annotator_zscore_preview(df: pd.DataFrame):
     """
     For each annotator, compute mean/std on calibration items only (if exist),
-    then show z-scored overall for non-calibration. This is only a preview helper.
+    then show z-scored overall for non-calibration. Preview only.
     """
     if df.empty:
         return df
-
-    # must have annotator_id and is_calibration
     if "annotator_id" not in df.columns or "is_calibration" not in df.columns:
         return df
 
     out = df.copy()
-    # zscore overall only (you can extend to dims)
     out["overall_z"] = None
 
     for aid, g in out.groupby("annotator_id"):
@@ -291,7 +289,17 @@ def per_annotator_zscore_preview(df: pd.DataFrame, dims):
 
 def main():
     init_state()
-    st.title("🚀 Plot Annotation Tool (v5.0)")
+    st.title("🚀 Plot Annotation Tool (v5.2 • Single Plot • VAD)")
+
+    # ---- Dimensions (now includes full VAD) ----
+    dims = [
+        ("Surprise", "剧情新意/反转/不可预测性"),
+        ("Valence", "情绪正负方向（偏积极 vs 偏消极；不是强度）"),
+        ("Arousal", "情绪强度/紧张度（是否让人紧绷、激动、压迫）"),
+        ("Dominance", "掌控感/主导权（角色能否主动推动局势 vs 被命运摆布）"),
+        ("Conflict", "冲突强度与多样性（人-人/人-自我/人-环境）"),
+        ("Coherence", "因果自洽与整体合理性"),
+    ]
 
     # --- Sidebar ---
     with st.sidebar:
@@ -311,7 +319,7 @@ def main():
         if st.button("Clear All Plots"):
             st.session_state.plots = []
             st.session_state.gold_ids = set()
-            st.session_state.pair = {"a": 0, "b": 1}
+            st.session_state.sel_idx = 0
             st.rerun()
 
         if st.button("Clear All Annotations"):
@@ -321,9 +329,9 @@ def main():
         st.divider()
         st.subheader("Calibration (Gold)")
         st.caption("选择 1-3 个 plot 作为校准题（每个标注者都先给这些打分，用于归一化尺度）")
-        # show selector only if plots exist
         if st.session_state.plots:
-            title_map = {f"{i}: {safe_get(p,'title','Untitled')}": get_plot_id(p) for i, p in enumerate(st.session_state.plots)}
+            title_map = {f"{i}: {safe_get(p,'title','Untitled')}": get_plot_id(p)
+                         for i, p in enumerate(st.session_state.plots)}
             gold_keys = st.multiselect(
                 "选择 Gold Plots",
                 options=list(title_map.keys()),
@@ -332,43 +340,34 @@ def main():
             st.session_state.gold_ids = set(title_map[k] for k in gold_keys)
 
     # --- Need data ---
-    if len(st.session_state.plots) < 2:
-        st.info("👈 请上传至少 2 个 JSON 文件")
+    if len(st.session_state.plots) < 1:
+        st.info("👈 请上传至少 1 个 JSON 文件")
         return
 
-    # --- Pair Selection ---
+    # --- Plot Selection ---
     titles = [safe_get(p, "title", f"Plot {i}") for i, p in enumerate(st.session_state.plots)]
     max_idx = len(titles) - 1
 
-    top = st.columns([1, 1, 1, 2])
+    top = st.columns([1, 1, 3])
     with top[0]:
-        idx_a = st.selectbox("Plot A", range(len(titles)), index=st.session_state.pair.get("a", 0), format_func=lambda i: titles[i], key="sel_a")
+        idx = st.selectbox(
+            "选择 Plot",
+            range(len(titles)),
+            index=int(st.session_state.sel_idx),
+            format_func=lambda i: titles[i],
+            key="sel_plot"
+        )
     with top[1]:
-        default_b = st.session_state.pair.get("b", 1 if len(titles) > 1 else 0)
-        if default_b == idx_a:
-            default_b = 0 if idx_a != 0 else min(1, max_idx)
-        idx_b = st.selectbox("Plot B", range(len(titles)), index=default_b, format_func=lambda i: titles[i], key="sel_b")
-
-    with top[2]:
-        if st.button("🎲 Random Pair"):
-            a = random.randint(0, max_idx)
-            b = random.randint(0, max_idx)
-            while b == a and max_idx >= 1:
-                b = random.randint(0, max_idx)
-            st.session_state.pair = {"a": a, "b": b}
+        if st.button("🎲 Random Plot"):
+            st.session_state.sel_idx = random.randint(0, max_idx)
             st.rerun()
+    with top[2]:
+        st.caption("Tip: Random Plot 可以减少挑选偏差；Gold plots 用于校准不同标注者的尺度。")
 
-    with top[3]:
-        st.caption("Tip: Random Pair 可以减少挑选偏差；Gold plots 用于校准不同标注者的尺度。")
+    st.session_state.sel_idx = int(idx)
 
-    st.session_state.pair = {"a": int(idx_a), "b": int(idx_b)}
-
-    # --- Render two plots ---
-    col_a, col_b = st.columns(2)
-    with col_a:
-        render_card(st.session_state.plots[idx_a], "A")
-    with col_b:
-        render_card(st.session_state.plots[idx_b], "B")
+    plot = st.session_state.plots[st.session_state.sel_idx]
+    render_card(plot)
 
     # --- Scoring Form ---
     st.divider()
@@ -378,54 +377,25 @@ def main():
         st.warning("请先在左侧填写 annotator_id（必填），否则不允许提交。")
         return
 
-    plotA = st.session_state.plots[idx_a]
-    plotB = st.session_state.plots[idx_b]
+    pid = get_plot_id(plot)
+    is_calibration = (pid in st.session_state.gold_ids)
 
-    seedA = safe_get(plotA, "seed_id", safe_get(plotA, "seed", ""))
-    seedB = safe_get(plotB, "seed_id", safe_get(plotB, "seed", ""))
-
-    methodA = safe_get(plotA, "method_name", safe_get(plotA, "method", safe_get(plotA, "system", "")))
-    methodB = safe_get(plotB, "method_name", safe_get(plotB, "method", safe_get(plotB, "system", "")))
-
-    dims = [
-        ("Surprise", "剧情新意/反转/不可预测性"),
-        ("Valence", "情绪起伏强度（快乐/悲伤等波动）"),
-        ("Conflict", "冲突强度与多样性（人-人/人-自我/人-环境）"),
-        ("Coherence", "因果自洽与整体合理性"),
-    ]
-
-    # identify if this annotation is a calibration one:
-    # if either A or B is in gold set => mark is_calibration True
-    pidA = get_plot_id(plotA)
-    pidB = get_plot_id(plotB)
-    is_calibration = (pidA in st.session_state.gold_ids) or (pidB in st.session_state.gold_ids)
+    seed = safe_get(plot, "seed_id", safe_get(plot, "seed", ""))
+    method = safe_get(plot, "method_name", safe_get(plot, "method", safe_get(plot, "system", "")))
 
     with st.form("score_form", clear_on_submit=False):
         if is_calibration:
-            st.info("🟨 当前对比包含 Gold Plot（校准题）：该条记录会标记为 is_calibration=True")
+            st.info("🟨 当前 Plot 是 Gold Plot（校准题）：该条记录会标记为 is_calibration=True")
 
-        st.markdown("给 **A** 和 **B** 分别打分（1=很差，10=非常好）。")
+        st.markdown("对 **当前 Plot** 绝对打分（1=很差，10=非常好）。")
 
-        col1, col2 = st.columns(2)
-        scoresA, scoresB = {}, {}
-
-        with col1:
-            st.markdown("### A 评分")
-            for key, desc in dims:
-                scoresA[key] = st.slider(
-                    f"{key}（{desc}）",
-                    min_value=1, max_value=10, value=6, step=1,
-                    key=f"A_{key}"
-                )
-
-        with col2:
-            st.markdown("### B 评分")
-            for key, desc in dims:
-                scoresB[key] = st.slider(
-                    f"{key}（{desc}）",
-                    min_value=1, max_value=10, value=6, step=1,
-                    key=f"B_{key}"
-                )
+        scores = {}
+        for key, desc in dims:
+            scores[key] = st.slider(
+                f"{key}（{desc}）",
+                min_value=1, max_value=10, value=6, step=1,
+                key=f"S_{key}"
+            )
 
         st.markdown("---")
         overall = st.slider("Overall（整体评价）", 1, 10, 6, 1, key="Overall")
@@ -451,19 +421,12 @@ def main():
                 "annotator_id": st.session_state.annotator_id,
                 "is_calibration": bool(is_calibration),
 
-                "plotA_id": pidA,
-                "plotB_id": pidB,
-                "plotA_title": safe_get(plotA, "title", ""),
-                "plotB_title": safe_get(plotB, "title", ""),
-                "plotA_genre": safe_get(plotA, "genre", ""),
-                "plotB_genre": safe_get(plotB, "genre", ""),
-                "plotA_status": safe_get(plotA, "status", ""),
-                "plotB_status": safe_get(plotB, "status", ""),
-
-                "plotA_seed_id": seedA,
-                "plotB_seed_id": seedB,
-                "plotA_method": methodA,
-                "plotB_method": methodB,
+                "plot_id": pid,
+                "plot_title": safe_get(plot, "title", ""),
+                "plot_genre": safe_get(plot, "genre", ""),
+                "plot_status": safe_get(plot, "status", ""),
+                "seed_id": seed,
+                "method_name": method,
 
                 "overall": int(overall),
                 "confidence": confidence,
@@ -471,13 +434,7 @@ def main():
             }
 
             for k, _ in dims:
-                row[f"A_{k}"] = int(scoresA[k])
-                row[f"B_{k}"] = int(scoresB[k])
-                row[f"delta_{k}"] = int(scoresA[k] - scoresB[k])
-
-            # helpful derived label for quick pairwise preference (optional)
-            row["pair_preference"] = "A" if overall >= 6 and (sum(row[f"delta_{k}"] for k, _ in dims) > 0) else (
-                                    "B" if overall <= 5 and (sum(row[f"delta_{k}"] for k, _ in dims) < 0) else "mixed")
+                row[k] = int(scores[k])
 
             st.session_state.annotations.append(row)
             st.success(f"已保存标注 ✅ 当前累计 {len(st.session_state.annotations)} 条")
@@ -504,10 +461,12 @@ def main():
     # --- Normalization preview based on calibration items ---
     st.markdown("### 🧪 归一化预览（基于 Gold / Calibration）")
     st.caption("这一步只是预览：对每个 annotator，用其 calibration 记录的 overall 均值/方差做 z-score。")
-    df_norm = per_annotator_zscore_preview(df, dims)
+    df_norm = per_annotator_zscore_preview(df)
 
-    show_cols = ["timestamp_utc", "annotator_id", "is_calibration",
-                 "plotA_title", "plotB_title", "overall", "overall_z", "confidence", "notes"]
+    show_cols = [
+        "timestamp_utc", "annotator_id", "is_calibration",
+        "plot_title", "overall", "overall_z", "confidence", "notes"
+    ]
     show_cols = [c for c in show_cols if c in df_norm.columns]
     st.dataframe(df_norm[show_cols], use_container_width=True, height=260)
 
