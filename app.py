@@ -1,10 +1,11 @@
 """
-Plot Annotation Tool - v5.2 (Single Plot + VAD + Export + Random + Calib)
+Plot Annotation Tool - v5.3 (Single Plot + VAD + Export + Random + Calib + Bilingual)
 Features:
 1) Absolute scoring for ONE plot on each dimension (1-10), + overall + notes
 2) Export CSV + clear annotations
 3) Add annotator_id, timestamp, seed_id, method_name + Random Plot button
 4) Calibration items (gold plots) + per-annotator z-score normalization helper preview
+5) Bilingual (English + Chinese) UI
 """
 
 import streamlit as st
@@ -24,7 +25,7 @@ except ImportError:
 
 # ============== Page Config ==============
 st.set_page_config(
-    page_title="📖 Plot Annotation Tool (Single • VAD)",
+    page_title="📖 Plot Annotation Tool | 剧本标注工具",
     page_icon="📖",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -212,7 +213,58 @@ def render_card(plot):
             <div style="padding:15px;">
         """, unsafe_allow_html=True)
 
-        t1, t2, t3 = st.tabs(["🗺️ 因果图", "🌳 故事树", "📜 完整剧本"])
+        t0, t1, t2, t3 = st.tabs([
+            "📋 Input / 设定输入", 
+            "🗺️ Causal Graph / 因果图", 
+            "🌳 Story Tree / 故事树", 
+            "📜 Full Script / 完整剧本"
+        ])
+
+        with t0:
+            # 显示 inputs 数据
+            st.markdown("#### 🕐 Time & Location / 时间 & 地点")
+            time_val = safe_get(plot, 'time', '')
+            location_val = safe_get(plot, 'location', '')
+            if time_val or location_val:
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown(f"**Time / 时间:** {time_val if time_val else 'Not specified / 未指定'}")
+                with col2:
+                    st.markdown(f"**Location / 地点:** {location_val if location_val else 'Not specified / 未指定'}")
+            else:
+                st.info("No time/location info / 无时间/地点信息")
+
+            st.markdown("#### 🎭 Setting / 场景设定")
+            setting_val = safe_get(plot, 'setting', '')
+            if setting_val:
+                st.markdown(f'<div class="paper-sheet"><div class="script-text">{setting_val}</div></div>', unsafe_allow_html=True)
+            else:
+                st.info("No setting info / 无场景设定")
+
+            st.markdown("#### 👥 Characters / 角色列表")
+            characters = plot.get('characters', [])
+            if characters and isinstance(characters, list) and len(characters) > 0:
+                for char in characters:
+                    if isinstance(char, dict):
+                        name = char.get('name', 'Unknown / 未知')
+                        desc = char.get('description', 'No description / 无描述')
+                        st.markdown(f"**{name}**: {desc}")
+                    else:
+                        st.markdown(f"- {char}")
+            else:
+                st.info("No character info / 无角色信息")
+
+            st.markdown("#### 📖 Background / 背景故事")
+            background_val = safe_get(plot, 'background', '')
+            if background_val:
+                st.markdown(f'<div class="paper-sheet"><div class="script-text">{background_val}</div></div>', unsafe_allow_html=True)
+            else:
+                st.info("No background info / 无背景故事")
+
+            # 显示作者信息（如果有）
+            author_val = safe_get(plot, 'author', '')
+            if author_val and author_val != 'Unknown':
+                st.markdown(f"**Author / 作者:** {author_val}")
 
         with t1:
             g_data = get_graph_data(plot)
@@ -220,12 +272,12 @@ def render_card(plot):
                 chart = create_causal_chart(g_data)
                 if chart:
                     st.graphviz_chart(chart, use_container_width=True)
-                    with st.expander("🔍 放大 / 全屏查看"):
+                    with st.expander("🔍 Enlarge / Fullscreen / 放大查看"):
                         st.graphviz_chart(chart, use_container_width=True)
                 else:
-                    st.info("Graphviz 未安装或图数据不可用")
+                    st.info("Graphviz not installed or graph data unavailable / Graphviz 未安装或图数据不可用")
             else:
-                st.info("无因果图数据")
+                st.info("No causal graph data / 无因果图数据")
 
         with t2:
             tree_txt = safe_get(plot, 'pruned_tree', '')
@@ -233,14 +285,14 @@ def render_card(plot):
                 chart_tree = parse_tree_text_to_graphviz(tree_txt)
                 if chart_tree:
                     st.graphviz_chart(chart_tree, use_container_width=True)
-                    with st.expander("🔍 放大树状图"):
+                    with st.expander("🔍 Enlarge Tree / 放大树状图"):
                         st.graphviz_chart(chart_tree, use_container_width=True)
 
                 st.markdown('<div class="paper-sheet"><div class="tree-text">', unsafe_allow_html=True)
                 st.text(tree_txt)
                 st.markdown('</div></div>', unsafe_allow_html=True)
             else:
-                st.info("无故事树")
+                st.info("No story tree / 无故事树")
 
         with t3:
             final_plot = safe_get(plot, 'final_plot', '')
@@ -249,7 +301,7 @@ def render_card(plot):
                 st.markdown(final_plot)
                 st.markdown('</div></div>', unsafe_allow_html=True)
             else:
-                st.warning("暂无剧本")
+                st.warning("No script available / 暂无剧本")
 
         st.markdown("</div></div>", unsafe_allow_html=True)
 
@@ -289,51 +341,57 @@ def per_annotator_zscore_preview(df: pd.DataFrame):
 
 def main():
     init_state()
-    st.title("🚀 Plot Annotation Tool (v5.2 • Single Plot • VAD)")
+    st.title("🚀 Plot Annotation Tool | 剧本标注工具 (v5.3)")
 
     # ---- Dimensions (now includes full VAD) ----
     dims = [
-        ("Surprise", "剧情新意/反转/不可预测性"),
-        ("Valence", "情绪正负方向（偏积极 vs 偏消极；不是强度）"),
-        ("Arousal", "情绪强度/紧张度（是否让人紧绷、激动、压迫）"),
-        ("Dominance", "掌控感/主导权（角色能否主动推动局势 vs 被命运摆布）"),
-        ("Conflict", "冲突强度与多样性（人-人/人-自我/人-环境）"),
-        ("Coherence", "因果自洽与整体合理性"),
+        ("Surprise", "Novelty/twists/unpredictability | 剧情新意/反转/不可预测性"),
+        ("Valence", "Emotional direction (positive vs negative) | 情绪正负方向"),
+        ("Arousal", "Emotional intensity/tension | 情绪强度/紧张度"),
+        ("Dominance", "Control/agency of characters | 角色掌控感/主导权"),
+        ("Conflict", "Conflict intensity & diversity | 冲突强度与多样性"),
+        ("Coherence", "Causal consistency & plausibility | 因果自洽与整体合理性"),
     ]
 
     # --- Sidebar ---
     with st.sidebar:
-        st.subheader("Annotator")
-        annotator_id = st.text_input("annotator_id（必填）", value=st.session_state.get("annotator_id", ""))
+        st.subheader("👤 Annotator / 标注者")
+        annotator_id = st.text_input(
+            "Annotator ID (required) / 标注者ID（必填）", 
+            value=st.session_state.get("annotator_id", "")
+        )
         st.session_state.annotator_id = annotator_id
 
         st.divider()
-        st.subheader("Data Upload")
-        files = st.file_uploader("JSON Files", accept_multiple_files=True)
+        st.subheader("📂 Data Upload / 数据上传")
+        files = st.file_uploader(
+            "JSON Files / JSON 文件", 
+            accept_multiple_files=True
+        )
         if files:
             load_json(files)
 
-        st.metric("Plots Loaded", len(st.session_state.plots))
-        st.metric("Annotations Saved", len(st.session_state.annotations))
+        st.metric("Plots Loaded / 已加载剧本", len(st.session_state.plots))
+        st.metric("Annotations Saved / 已保存标注", len(st.session_state.annotations))
 
-        if st.button("Clear All Plots"):
+        if st.button("🗑️ Clear All Plots / 清空所有剧本"):
             st.session_state.plots = []
             st.session_state.gold_ids = set()
             st.session_state.sel_idx = 0
             st.rerun()
 
-        if st.button("Clear All Annotations"):
+        if st.button("🗑️ Clear All Annotations / 清空所有标注"):
             st.session_state.annotations = []
             st.rerun()
 
         st.divider()
-        st.subheader("Calibration (Gold)")
-        st.caption("选择 1-3 个 plot 作为校准题（每个标注者都先给这些打分，用于归一化尺度）")
+        st.subheader("🏆 Calibration (Gold) / 校准题")
+        st.caption("Select 1-3 plots as calibration items (for normalizing scales across annotators) / 选择 1-3 个 plot 作为校准题（用于归一化不同标注者的尺度）")
         if st.session_state.plots:
             title_map = {f"{i}: {safe_get(p,'title','Untitled')}": get_plot_id(p)
                          for i, p in enumerate(st.session_state.plots)}
             gold_keys = st.multiselect(
-                "选择 Gold Plots",
+                "Select Gold Plots / 选择校准剧本",
                 options=list(title_map.keys()),
                 default=[],
             )
@@ -341,7 +399,7 @@ def main():
 
     # --- Need data ---
     if len(st.session_state.plots) < 1:
-        st.info("👈 请上传至少 1 个 JSON 文件")
+        st.info("👈 Please upload at least 1 JSON file / 请上传至少 1 个 JSON 文件")
         return
 
     # --- Plot Selection ---
@@ -351,18 +409,18 @@ def main():
     top = st.columns([1, 1, 3])
     with top[0]:
         idx = st.selectbox(
-            "选择 Plot",
+            "Select Plot / 选择剧本",
             range(len(titles)),
             index=int(st.session_state.sel_idx),
             format_func=lambda i: titles[i],
             key="sel_plot"
         )
     with top[1]:
-        if st.button("🎲 Random Plot"):
+        if st.button("🎲 Random Plot / 随机选择"):
             st.session_state.sel_idx = random.randint(0, max_idx)
             st.rerun()
     with top[2]:
-        st.caption("Tip: Random Plot 可以减少挑选偏差；Gold plots 用于校准不同标注者的尺度。")
+        st.caption("Tip: Random Plot reduces selection bias; Gold plots calibrate annotator scales. / 提示：随机选择可减少挑选偏差；校准题用于归一化不同标注者的尺度。")
 
     st.session_state.sel_idx = int(idx)
 
@@ -371,10 +429,10 @@ def main():
 
     # --- Scoring Form ---
     st.divider()
-    st.subheader("⚖️ 评分 / 标注（1-10）")
+    st.subheader("⚖️ Scoring / Annotation (1-10) | 评分 / 标注（1-10）")
 
     if not st.session_state.get("annotator_id"):
-        st.warning("请先在左侧填写 annotator_id（必填），否则不允许提交。")
+        st.warning("Please fill in annotator_id on the left sidebar (required) before submitting. / 请先在左侧填写 annotator_id（必填），否则不允许提交。")
         return
 
     pid = get_plot_id(plot)
@@ -385,33 +443,37 @@ def main():
 
     with st.form("score_form", clear_on_submit=False):
         if is_calibration:
-            st.info("🟨 当前 Plot 是 Gold Plot（校准题）：该条记录会标记为 is_calibration=True")
+            st.info("🟨 This is a Gold Plot (calibration item): will be marked as is_calibration=True / 当前 Plot 是校准题：该条记录会标记为 is_calibration=True")
 
-        st.markdown("对 **当前 Plot** 绝对打分（1=很差，10=非常好）。")
+        st.markdown("Rate the **current plot** absolutely (1=very poor, 10=excellent). / 对 **当前剧本** 绝对打分（1=很差，10=非常好）。")
 
         scores = {}
         for key, desc in dims:
             scores[key] = st.slider(
-                f"{key}（{desc}）",
+                f"{key} ({desc})",
                 min_value=1, max_value=10, value=6, step=1,
                 key=f"S_{key}"
             )
 
         st.markdown("---")
-        overall = st.slider("Overall（整体评价）", 1, 10, 6, 1, key="Overall")
+        overall = st.slider(
+            "Overall (Overall rating) / 整体评价", 
+            1, 10, 6, 1, 
+            key="Overall"
+        )
         confidence = st.select_slider(
-            "Confidence（你对本次评分的把握）",
+            "Confidence (Your certainty about this rating) / 置信度（你对本次评分的把握）",
             options=["low", "mid", "high"],
             value="mid",
             key="Confidence"
         )
         notes = st.text_area(
-            "Notes（可选：一句话理由 / 失败模式 / 适用场景）",
+            "Notes (Optional: brief reasoning / failure modes / use cases) / 备注（可选：一句话理由 / 失败模式 / 适用场景）",
             key="Notes",
             height=120
         )
 
-        submitted = st.form_submit_button("提交标注")
+        submitted = st.form_submit_button("✅ Submit Annotation / 提交标注")
 
         if submitted:
             now = datetime.now(timezone.utc).isoformat()
@@ -437,30 +499,30 @@ def main():
                 row[k] = int(scores[k])
 
             st.session_state.annotations.append(row)
-            st.success(f"已保存标注 ✅ 当前累计 {len(st.session_state.annotations)} 条")
+            st.success(f"Annotation saved ✅ Total: {len(st.session_state.annotations)} / 已保存标注 ✅ 当前累计 {len(st.session_state.annotations)} 条")
 
     # --- Data Preview / Export ---
     st.divider()
-    st.subheader("📊 已收集标注（预览 / 导出 / 归一化预览）")
+    st.subheader("📊 Collected Annotations (Preview / Export / Normalization) | 已收集标注（预览 / 导出 / 归一化）")
 
     df = make_df()
     if df.empty:
-        st.info("还没有任何标注记录。")
+        st.info("No annotations yet. / 还没有任何标注记录。")
         return
 
     st.dataframe(df, use_container_width=True, height=320)
 
     csv_bytes = df.to_csv(index=False).encode("utf-8")
     st.download_button(
-        "⬇️ 下载 CSV（raw）",
+        "⬇️ Download CSV (raw) / 下载 CSV（原始数据）",
         data=csv_bytes,
         file_name="plot_annotations_raw.csv",
         mime="text/csv"
     )
 
     # --- Normalization preview based on calibration items ---
-    st.markdown("### 🧪 归一化预览（基于 Gold / Calibration）")
-    st.caption("这一步只是预览：对每个 annotator，用其 calibration 记录的 overall 均值/方差做 z-score。")
+    st.markdown("### 🧪 Normalization Preview (based on Gold/Calibration) | 归一化预览（基于校准题）")
+    st.caption("Preview only: for each annotator, z-score using mean/std from their calibration records. / 仅预览：对每个标注者，用其校准题的 overall 均值/方差做 z-score。")
     df_norm = per_annotator_zscore_preview(df)
 
     show_cols = [
@@ -472,7 +534,7 @@ def main():
 
     csv_norm = df_norm.to_csv(index=False).encode("utf-8")
     st.download_button(
-        "⬇️ 下载 CSV（with overall_z preview）",
+        "⬇️ Download CSV (with overall_z) / 下载 CSV（含归一化分数）",
         data=csv_norm,
         file_name="plot_annotations_with_overall_z.csv",
         mime="text/csv"
