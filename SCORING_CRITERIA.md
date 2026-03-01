@@ -1,8 +1,4 @@
-以下是为您重新整理的 **SCORING_CRITERIA.MD** 和 **ANNOTATION_WORKFLOW.MD**。
 
-为了彻底解决 Tyler 提出的“评分范围冲突”和“缺乏外部参照”的问题，我在打分细则中加入了 **1-10 全量程的锚点案例（Anchor Examples）**。这样标注员无需与前一个剧本对比，只需与“标准尺”对比即可。
-
----
 
 ## 1. SCORING_CRITERIA.MD (剧本评分细则)
 
